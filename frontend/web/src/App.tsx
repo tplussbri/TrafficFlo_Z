@@ -1,6 +1,6 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import '@rainbow-me/rainbowkit/styles.css';
-import React, { JSX, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { getContractReadOnly, getContractWithSigner } from "./components/useContract";
 import "./App.css";
 import { useAccount } from 'wagmi';
@@ -8,26 +8,24 @@ import { useFhevm, useEncrypt, useDecrypt } from '../fhevm-sdk/src';
 import { ethers } from 'ethers';
 
 interface TrafficData {
-  id: number;
+  id: string;
   name: string;
-  flowRate: string;
-  signalTiming: string;
-  congestionLevel: string;
-  timestamp: number;
-  creator: string;
+  encryptedValue: string;
   publicValue1: number;
   publicValue2: number;
+  description: string;
+  creator: string;
+  timestamp: number;
   isVerified?: boolean;
   decryptedValue?: number;
-  encryptedValueHandle?: string;
 }
 
-interface TrafficAnalysis {
-  efficiencyScore: number;
-  congestionIndex: number;
-  optimizationPotential: number;
-  safetyRating: number;
-  environmentalImpact: number;
+interface TrafficStats {
+  totalRecords: number;
+  verifiedRecords: number;
+  avgTrafficFlow: number;
+  recentActivity: number;
+  congestionLevel: number;
 }
 
 const App: React.FC = () => {
@@ -39,39 +37,45 @@ const App: React.FC = () => {
   const [creatingData, setCreatingData] = useState(false);
   const [transactionStatus, setTransactionStatus] = useState<{ visible: boolean; status: "pending" | "success" | "error"; message: string; }>({ 
     visible: false, 
-    status: "pending" as const, 
+    status: "pending", 
     message: "" 
   });
-  const [newTrafficData, setNewTrafficData] = useState({ name: "", flowRate: "", signalTiming: "" });
+  const [newTrafficData, setNewTrafficData] = useState({ 
+    location: "", 
+    flowRate: "", 
+    congestion: "" 
+  });
   const [selectedData, setSelectedData] = useState<TrafficData | null>(null);
-  const [decryptedData, setDecryptedData] = useState<{ flowRate: number | null; signalTiming: number | null }>({ flowRate: null, signalTiming: null });
+  const [decryptedValues, setDecryptedValues] = useState<Map<string, number>>(new Map());
   const [isDecrypting, setIsDecrypting] = useState(false);
   const [contractAddress, setContractAddress] = useState("");
   const [fhevmInitializing, setFhevmInitializing] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterVerified, setFilterVerified] = useState(false);
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [stats, setStats] = useState<TrafficStats>({
+    totalRecords: 0,
+    verifiedRecords: 0,
+    avgTrafficFlow: 0,
+    recentActivity: 0,
+    congestionLevel: 0
+  });
 
   const { status, initialize, isInitialized } = useFhevm();
-  const { encrypt, isEncrypting} = useEncrypt();
+  const { encrypt, isEncrypting } = useEncrypt();
   const { verifyDecryption, isDecrypting: fheIsDecrypting } = useDecrypt();
 
   useEffect(() => {
     const initFhevmAfterConnection = async () => {
-      if (!isConnected) return;
-      if (isInitialized) return;
-      if (fhevmInitializing) return;
+      if (!isConnected || isInitialized || fhevmInitializing) return;
       
       try {
         setFhevmInitializing(true);
-        console.log('Initializing FHEVM after wallet connection...');
         await initialize();
-        console.log('FHEVM initialized successfully');
       } catch (error) {
-        console.error('Failed to initialize FHEVM:', error);
+        console.error('FHEVM initialization failed:', error);
         setTransactionStatus({ 
           visible: true, 
           status: "error", 
-          message: "FHEVM initialization failed. Please check your wallet connection." 
+          message: "FHEVM initialization failed" 
         });
         setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
       } finally {
@@ -90,7 +94,7 @@ const App: React.FC = () => {
       }
       
       try {
-        await loadData();
+        await loadTrafficData();
         const contract = await getContractReadOnly();
         if (contract) setContractAddress(await contract.getAddress());
       } catch (error) {
@@ -103,7 +107,33 @@ const App: React.FC = () => {
     loadDataAndContract();
   }, [isConnected]);
 
-  const loadData = async () => {
+  useEffect(() => {
+    calculateStats();
+  }, [trafficData]);
+
+  const calculateStats = () => {
+    const totalRecords = trafficData.length;
+    const verifiedRecords = trafficData.filter(d => d.isVerified).length;
+    const avgTrafficFlow = totalRecords > 0 
+      ? trafficData.reduce((sum, d) => sum + d.publicValue1, 0) / totalRecords 
+      : 0;
+    const recentActivity = trafficData.filter(d => 
+      Date.now()/1000 - d.timestamp < 60 * 60 * 24
+    ).length;
+    const congestionLevel = totalRecords > 0 
+      ? trafficData.reduce((sum, d) => sum + d.publicValue2, 0) / totalRecords 
+      : 0;
+
+    setStats({
+      totalRecords,
+      verifiedRecords,
+      avgTrafficFlow,
+      recentActivity,
+      congestionLevel
+    });
+  };
+
+  const loadTrafficData = async () => {
     if (!isConnected) return;
     
     setIsRefreshing(true);
@@ -118,20 +148,19 @@ const App: React.FC = () => {
         try {
           const businessData = await contract.getBusinessData(businessId);
           dataList.push({
-            id: parseInt(businessId.replace('traffic-', '')) || Date.now(),
+            id: businessId,
             name: businessData.name,
-            flowRate: businessId,
-            signalTiming: businessId,
-            congestionLevel: businessId,
-            timestamp: Number(businessData.timestamp),
-            creator: businessData.creator,
+            encryptedValue: businessId,
             publicValue1: Number(businessData.publicValue1) || 0,
             publicValue2: Number(businessData.publicValue2) || 0,
+            description: businessData.description,
+            creator: businessData.creator,
+            timestamp: Number(businessData.timestamp),
             isVerified: businessData.isVerified,
             decryptedValue: Number(businessData.decryptedValue) || 0
           });
         } catch (e) {
-          console.error('Error loading business data:', e);
+          console.error('Error loading traffic data:', e);
         }
       }
       
@@ -152,11 +181,11 @@ const App: React.FC = () => {
     }
     
     setCreatingData(true);
-    setTransactionStatus({ visible: true, status: "pending", message: "Creating traffic data with Zama FHE..." });
+    setTransactionStatus({ visible: true, status: "pending", message: "Creating traffic data with FHE encryption..." });
     
     try {
       const contract = await getContractWithSigner();
-      if (!contract) throw new Error("Failed to get contract with signer");
+      if (!contract) throw new Error("Contract not available");
       
       const flowRateValue = parseInt(newTrafficData.flowRate) || 0;
       const businessId = `traffic-${Date.now()}`;
@@ -165,12 +194,12 @@ const App: React.FC = () => {
       
       const tx = await contract.createBusinessData(
         businessId,
-        newTrafficData.name,
+        newTrafficData.location,
         encryptedResult.encryptedData,
         encryptedResult.proof,
-        parseInt(newTrafficData.signalTiming) || 0,
-        0,
-        "Traffic Flow Data"
+        flowRateValue,
+        parseInt(newTrafficData.congestion) || 0,
+        "Traffic flow data"
       );
       
       setTransactionStatus({ visible: true, status: "pending", message: "Waiting for transaction confirmation..." });
@@ -181,13 +210,13 @@ const App: React.FC = () => {
         setTransactionStatus({ visible: false, status: "pending", message: "" });
       }, 2000);
       
-      await loadData();
+      await loadTrafficData();
       setShowCreateModal(false);
-      setNewTrafficData({ name: "", flowRate: "", signalTiming: "" });
+      setNewTrafficData({ location: "", flowRate: "", congestion: "" });
     } catch (e: any) {
       const errorMessage = e.message?.includes("user rejected transaction") 
-        ? "Transaction rejected by user" 
-        : "Submission failed: " + (e.message || "Unknown error");
+        ? "Transaction rejected" 
+        : "Submission failed";
       setTransactionStatus({ visible: true, status: "error", message: errorMessage });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
     } finally { 
@@ -210,16 +239,8 @@ const App: React.FC = () => {
       const businessData = await contractRead.getBusinessData(businessId);
       if (businessData.isVerified) {
         const storedValue = Number(businessData.decryptedValue) || 0;
-        
-        setTransactionStatus({ 
-          visible: true, 
-          status: "success", 
-          message: "Data already verified on-chain" 
-        });
-        setTimeout(() => {
-          setTransactionStatus({ visible: false, status: "pending", message: "" });
-        }, 2000);
-        
+        setTransactionStatus({ visible: true, status: "success", message: "Data already verified" });
+        setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
         return storedValue;
       }
       
@@ -235,13 +256,13 @@ const App: React.FC = () => {
           contractWrite.verifyDecryption(businessId, abiEncodedClearValues, decryptionProof)
       );
       
-      setTransactionStatus({ visible: true, status: "pending", message: "Verifying decryption on-chain..." });
+      setTransactionStatus({ visible: true, status: "pending", message: "Verifying decryption..." });
       
       const clearValue = result.decryptionResult.clearValues[encryptedValueHandle];
       
-      await loadData();
+      await loadTrafficData();
       
-      setTransactionStatus({ visible: true, status: "success", message: "Data decrypted and verified successfully!" });
+      setTransactionStatus({ visible: true, status: "success", message: "Data decrypted successfully!" });
       setTimeout(() => {
         setTransactionStatus({ visible: false, status: "pending", message: "" });
       }, 2000);
@@ -250,24 +271,13 @@ const App: React.FC = () => {
       
     } catch (e: any) { 
       if (e.message?.includes("Data already verified")) {
-        setTransactionStatus({ 
-          visible: true, 
-          status: "success", 
-          message: "Data is already verified on-chain" 
-        });
-        setTimeout(() => {
-          setTransactionStatus({ visible: false, status: "pending", message: "" });
-        }, 2000);
-        
-        await loadData();
+        setTransactionStatus({ visible: true, status: "success", message: "Data already verified" });
+        setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
+        await loadTrafficData();
         return null;
       }
       
-      setTransactionStatus({ 
-        visible: true, 
-        status: "error", 
-        message: "Decryption failed: " + (e.message || "Unknown error") 
-      });
+      setTransactionStatus({ visible: true, status: "error", message: "Decryption failed" });
       setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
       return null; 
     } finally { 
@@ -275,104 +285,89 @@ const App: React.FC = () => {
     }
   };
 
-  const analyzeTraffic = (data: TrafficData, decryptedFlow: number | null, decryptedSignal: number | null): TrafficAnalysis => {
-    const flowRate = data.isVerified ? (data.decryptedValue || 0) : (decryptedFlow || data.publicValue1 || 5);
-    const signalTiming = data.publicValue1 || 5;
-    
-    const baseEfficiency = Math.min(100, Math.round((flowRate * 0.6 + signalTiming * 0.4) * 8));
-    const timeFactor = Math.max(0.7, Math.min(1.3, 1 - (Date.now()/1000 - data.timestamp) / (60 * 60 * 24 * 7)));
-    const efficiencyScore = Math.round(baseEfficiency * timeFactor);
-    
-    const congestionIndex = Math.max(0, Math.min(100, 100 - (flowRate * 0.8 + signalTiming * 0.2)));
-    const optimizationPotential = Math.min(95, Math.round((flowRate * 0.3 + signalTiming * 0.7) * 10));
-    
-    const safetyRating = Math.max(60, Math.min(100, 100 - (flowRate * 0.1 + congestionIndex * 0.3)));
-    const environmentalImpact = Math.min(100, Math.round((flowRate * 0.4 + congestionIndex * 0.6) * 0.8));
-
-    return {
-      efficiencyScore,
-      congestionIndex,
-      optimizationPotential,
-      safetyRating,
-      environmentalImpact
-    };
+  const handleDecryptClick = async (data: TrafficData) => {
+    const decryptedValue = await decryptData(data.id);
+    if (decryptedValue !== null) {
+      setDecryptedValues(new Map(decryptedValues.set(data.id, decryptedValue)));
+    }
   };
 
-  const filteredData = trafficData.filter(item => {
-    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = !filterVerified || item.isVerified;
-    return matchesSearch && matchesFilter;
-  });
+  const checkAvailability = async () => {
+    try {
+      const contract = await getContractReadOnly();
+      if (!contract) return;
+      
+      const isAvailable = await contract.isAvailable();
+      setTransactionStatus({ 
+        visible: true, 
+        status: "success", 
+        message: `Contract is available: ${isAvailable}` 
+      });
+      setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 2000);
+    } catch (e) {
+      setTransactionStatus({ visible: true, status: "error", message: "Availability check failed" });
+      setTimeout(() => setTransactionStatus({ visible: false, status: "pending", message: "" }), 3000);
+    }
+  };
 
   const renderDashboard = () => {
-    const totalRecords = trafficData.length;
-    const verifiedRecords = trafficData.filter(m => m.isVerified).length;
-    const avgSignalTiming = trafficData.length > 0 
-      ? trafficData.reduce((sum, m) => sum + m.publicValue1, 0) / trafficData.length 
-      : 0;
-    
-    const recentRecords = trafficData.filter(m => 
-      Date.now()/1000 - m.timestamp < 60 * 60 * 24 * 3
-    ).length;
-
     return (
       <div className="dashboard-panels">
-        <div className="panel gradient-panel">
+        <div className="stats-panel neon-panel">
           <h3>Total Records</h3>
-          <div className="stat-value">{totalRecords}</div>
-          <div className="stat-trend">+{recentRecords} recent</div>
+          <div className="stat-value">{stats.totalRecords}</div>
+          <div className="stat-trend">+{stats.recentActivity} today</div>
         </div>
         
-        <div className="panel gradient-panel">
+        <div className="stats-panel neon-panel">
           <h3>Verified Data</h3>
-          <div className="stat-value">{verifiedRecords}/{totalRecords}</div>
-          <div className="stat-trend">FHE Verified</div>
+          <div className="stat-value">{stats.verifiedRecords}/{stats.totalRecords}</div>
+          <div className="stat-trend">FHE Protected</div>
         </div>
         
-        <div className="panel gradient-panel">
-          <h3>Avg Signal Timing</h3>
-          <div className="stat-value">{avgSignalTiming.toFixed(1)}s</div>
-          <div className="stat-trend">Optimized</div>
+        <div className="stats-panel neon-panel">
+          <h3>Avg Flow Rate</h3>
+          <div className="stat-value">{stats.avgTrafficFlow.toFixed(1)}</div>
+          <div className="stat-trend">vehicles/min</div>
+        </div>
+        
+        <div className="stats-panel neon-panel">
+          <h3>Congestion Level</h3>
+          <div className="stat-value">{stats.congestionLevel.toFixed(1)}%</div>
+          <div className="stat-trend">FHE Encrypted</div>
         </div>
       </div>
     );
   };
 
-  const renderAnalysisChart = (data: TrafficData, decryptedFlow: number | null, decryptedSignal: number | null) => {
-    const analysis = analyzeTraffic(data, decryptedFlow, decryptedSignal);
+  const renderTrafficChart = (data: TrafficData) => {
+    const flowRate = data.isVerified ? 
+      (data.decryptedValue || 0) : 
+      (decryptedValues.get(data.id) || data.publicValue1);
+    
+    const congestion = data.publicValue2;
     
     return (
-      <div className="analysis-chart">
+      <div className="traffic-chart">
         <div className="chart-row">
-          <div className="chart-label">Efficiency Score</div>
+          <div className="chart-label">Flow Rate</div>
           <div className="chart-bar">
             <div 
-              className="bar-fill" 
-              style={{ width: `${analysis.efficiencyScore}%` }}
+              className="bar-fill flow" 
+              style={{ width: `${Math.min(100, flowRate)}%` }}
             >
-              <span className="bar-value">{analysis.efficiencyScore}</span>
+              <span className="bar-value">{flowRate}</span>
             </div>
           </div>
         </div>
         <div className="chart-row">
-          <div className="chart-label">Congestion Index</div>
+          <div className="chart-label">Congestion</div>
           <div className="chart-bar">
             <div 
-              className="bar-fill risk" 
-              style={{ width: `${analysis.congestionIndex}%` }}
+              className="bar-fill congestion" 
+              style={{ width: `${congestion}%` }}
             >
-              <span className="bar-value">{analysis.congestionIndex}</span>
-            </div>
-          </div>
-        </div>
-        <div className="chart-row">
-          <div className="chart-label">Optimization Potential</div>
-          <div className="chart-bar">
-            <div 
-              className="bar-fill growth" 
-              style={{ width: `${analysis.optimizationPotential}%` }}
-            >
-              <span className="bar-value">{analysis.optimizationPotential}</span>
+              <span className="bar-value">{congestion}%</span>
             </div>
           </div>
         </div>
@@ -380,39 +375,47 @@ const App: React.FC = () => {
     );
   };
 
-  const renderFHEFlow = () => {
+  const renderFeatures = () => {
     return (
-      <div className="fhe-flow">
-        <div className="flow-step">
-          <div className="step-icon">🚗</div>
-          <div className="step-content">
-            <h4>Traffic Data Encryption</h4>
-            <p>Flow rates encrypted with Zama FHE 🔐</p>
-          </div>
+      <div className="features-section">
+        <div className="feature-card">
+          <div className="feature-icon">🔐</div>
+          <h4>FHE Encryption</h4>
+          <p>Traffic data encrypted with Zama FHE for privacy protection</p>
         </div>
-        <div className="flow-arrow">→</div>
-        <div className="flow-step">
-          <div className="step-icon">🛣️</div>
-          <div className="step-content">
-            <h4>Public Storage</h4>
-            <p>Encrypted data stored on-chain</p>
-          </div>
+        <div className="feature-card">
+          <div className="feature-icon">🚦</div>
+          <h4>Smart Signals</h4>
+          <p>Traffic lights adjust based on encrypted flow data</p>
         </div>
-        <div className="flow-arrow">→</div>
-        <div className="flow-step">
-          <div className="step-icon">🔓</div>
-          <div className="step-content">
-            <h4>Offline Decryption</h4>
-            <p>Client performs offline decryption</p>
-          </div>
+        <div className="feature-card">
+          <div className="feature-icon">📊</div>
+          <h4>Real-time Analytics</h4>
+          <p>Live traffic analysis without compromising privacy</p>
         </div>
-        <div className="flow-arrow">→</div>
-        <div className="flow-step">
-          <div className="step-icon">✅</div>
-          <div className="step-content">
-            <h4>On-chain Verification</h4>
-            <p>FHE signature verification</p>
-          </div>
+        <div className="feature-card">
+          <div className="feature-icon">⚡</div>
+          <h4>Fast Processing</h4>
+          <p>Homomorphic computations on encrypted data</p>
+        </div>
+      </div>
+    );
+  };
+
+  const renderFAQ = () => {
+    return (
+      <div className="faq-section">
+        <div className="faq-item">
+          <h4>How does FHE protect traffic data?</h4>
+          <p>FHE allows computations on encrypted data without decryption, ensuring privacy while enabling smart traffic optimization.</p>
+        </div>
+        <div className="faq-item">
+          <h4>What data is encrypted?</h4>
+          <p>Traffic flow rates are fully encrypted. Only congestion levels and metadata remain public for analysis.</p>
+        </div>
+        <div className="faq-item">
+          <h4>How are traffic lights optimized?</h4>
+          <p>Signals adjust timing based on encrypted flow patterns, reducing congestion without monitoring individual vehicles.</p>
         </div>
       </div>
     );
@@ -423,34 +426,18 @@ const App: React.FC = () => {
       <div className="app-container">
         <header className="app-header">
           <div className="logo">
-            <h1>🚦 TrafficFlo Zama</h1>
+            <h1>FHE Traffic Flow 🔐</h1>
           </div>
           <div className="header-actions">
-            <div className="wallet-connect-wrapper">
-              <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
-            </div>
+            <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
           </div>
         </header>
         
         <div className="connection-prompt">
           <div className="connection-content">
-            <div className="connection-icon">🚗</div>
-            <h2>Connect Your Wallet to Continue</h2>
-            <p>Please connect your wallet to initialize the encrypted traffic flow system.</p>
-            <div className="connection-steps">
-              <div className="step">
-                <span>1</span>
-                <p>Connect your wallet using the button above</p>
-              </div>
-              <div className="step">
-                <span>2</span>
-                <p>FHE system will automatically initialize</p>
-              </div>
-              <div className="step">
-                <span>3</span>
-                <p>Start managing encrypted traffic data</p>
-              </div>
-            </div>
+            <div className="connection-icon">🚦</div>
+            <h2>Connect Wallet to Access FHE Traffic System</h2>
+            <p>Secure, privacy-preserving traffic optimization powered by Fully Homomorphic Encryption</p>
           </div>
         </div>
       </div>
@@ -462,8 +449,6 @@ const App: React.FC = () => {
       <div className="loading-screen">
         <div className="fhe-spinner"></div>
         <p>Initializing FHE Encryption System...</p>
-        <p>Status: {fhevmInitializing ? "Initializing FHEVM" : status}</p>
-        <p className="loading-note">This may take a few moments</p>
       </div>
     );
   }
@@ -471,7 +456,7 @@ const App: React.FC = () => {
   if (loading) return (
     <div className="loading-screen">
       <div className="fhe-spinner"></div>
-      <p>Loading encrypted traffic system...</p>
+      <p>Loading traffic optimization system...</p>
     </div>
   );
 
@@ -479,361 +464,217 @@ const App: React.FC = () => {
     <div className="app-container">
       <header className="app-header">
         <div className="logo">
-          <h1>🚦 TrafficFlo Zama</h1>
+          <h1>FHE Traffic Flow 🚦</h1>
+          <p>Privacy-Preserving Traffic Optimization</p>
         </div>
         
         <div className="header-actions">
-          <button 
-            onClick={() => setShowCreateModal(true)} 
-            className="create-btn"
-          >
-            + New Traffic Data
-          </button>
-          <div className="wallet-connect-wrapper">
-            <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
-          </div>
+          <button onClick={checkAvailability} className="neon-btn">Check Contract</button>
+          <button onClick={() => setShowCreateModal(true)} className="neon-btn primary">+ Add Traffic Data</button>
+          <ConnectButton accountStatus="address" chainStatus="icon" showBalance={false}/>
         </div>
       </header>
+
+      <nav className="app-nav">
+        <button 
+          className={`nav-btn ${activeTab === "dashboard" ? "active" : ""}`}
+          onClick={() => setActiveTab("dashboard")}
+        >
+          Dashboard
+        </button>
+        <button 
+          className={`nav-btn ${activeTab === "data" ? "active" : ""}`}
+          onClick={() => setActiveTab("data")}
+        >
+          Traffic Data
+        </button>
+        <button 
+          className={`nav-btn ${activeTab === "features" ? "active" : ""}`}
+          onClick={() => setActiveTab("features")}
+        >
+          Features
+        </button>
+        <button 
+          className={`nav-btn ${activeTab === "faq" ? "active" : ""}`}
+          onClick={() => setActiveTab("faq")}
+        >
+          FAQ
+        </button>
+      </nav>
       
-      <div className="main-content-container">
-        <div className="dashboard-section">
-          <h2>Traffic Flow Analytics (FHE 🔐)</h2>
-          {renderDashboard()}
-          
-          <div className="panel gradient-panel full-width">
-            <h3>FHE 🔐 Traffic Encryption Flow</h3>
-            {renderFHEFlow()}
+      <main className="main-content">
+        {activeTab === "dashboard" && (
+          <div className="tab-content">
+            <h2>Traffic Analytics Dashboard</h2>
+            {renderDashboard()}
+            
+            <div className="realtime-panel neon-panel">
+              <h3>Real-time Traffic Flow</h3>
+              <div className="traffic-visualization">
+                <div className="road-network">
+                  <div className="intersection active"></div>
+                  <div className="road horizontal"></div>
+                  <div className="road vertical"></div>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
         
-        <div className="data-section">
-          <div className="section-header">
-            <h2>Traffic Data Records</h2>
-            <div className="header-actions">
-              <div className="search-filter">
+        {activeTab === "data" && (
+          <div className="tab-content">
+            <div className="section-header">
+              <h2>Traffic Data Records</h2>
+              <div className="header-actions">
+                <button onClick={loadTrafficData} className="neon-btn" disabled={isRefreshing}>
+                  {isRefreshing ? "Refreshing..." : "Refresh Data"}
+                </button>
+              </div>
+            </div>
+            
+            <div className="data-list">
+              {trafficData.length === 0 ? (
+                <div className="no-data">
+                  <p>No traffic data records found</p>
+                  <button className="neon-btn primary" onClick={() => setShowCreateModal(true)}>
+                    Add First Record
+                  </button>
+                </div>
+              ) : (
+                trafficData.map((data, index) => (
+                  <div 
+                    className={`data-item neon-card ${selectedData?.id === data.id ? "selected" : ""}`}
+                    key={index}
+                    onClick={() => setSelectedData(data)}
+                  >
+                    <div className="data-header">
+                      <h3>{data.name}</h3>
+                      <span className={`status-badge ${data.isVerified ? "verified" : "encrypted"}`}>
+                        {data.isVerified ? "✅ Verified" : "🔒 Encrypted"}
+                      </span>
+                    </div>
+                    <div className="data-details">
+                      <span>Flow: {data.publicValue1}</span>
+                      <span>Congestion: {data.publicValue2}%</span>
+                      <span>{new Date(data.timestamp * 1000).toLocaleDateString()}</span>
+                    </div>
+                    <button 
+                      className={`decrypt-btn ${data.isVerified || decryptedValues.has(data.id) ? "decrypted" : ""}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDecryptClick(data);
+                      }}
+                      disabled={isDecrypting}
+                    >
+                      {isDecrypting ? "Decrypting..." : 
+                       data.isVerified ? "Verified" : 
+                       decryptedValues.has(data.id) ? "Decrypted" : "Decrypt"}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            {selectedData && (
+              <div className="detail-panel neon-panel">
+                <h3>Traffic Data Details</h3>
+                {renderTrafficChart(selectedData)}
+                <div className="data-info">
+                  <p><strong>Location:</strong> {selectedData.name}</p>
+                  <p><strong>Encrypted Flow Rate:</strong> 
+                    {selectedData.isVerified ? 
+                      ` ${selectedData.decryptedValue} (verified)` : 
+                      decryptedValues.has(selectedData.id) ?
+                      ` ${decryptedValues.get(selectedData.id)} (decrypted)` :
+                      " 🔒 Encrypted"
+                    }
+                  </p>
+                  <p><strong>Congestion Level:</strong> {selectedData.publicValue2}%</p>
+                  <p><strong>Recorded:</strong> {new Date(selectedData.timestamp * 1000).toLocaleString()}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {activeTab === "features" && (
+          <div className="tab-content">
+            <h2>FHE Traffic Optimization Features</h2>
+            {renderFeatures()}
+          </div>
+        )}
+        
+        {activeTab === "faq" && (
+          <div className="tab-content">
+            <h2>Frequently Asked Questions</h2>
+            {renderFAQ()}
+          </div>
+        )}
+      </main>
+      
+      {showCreateModal && (
+        <div className="modal-overlay">
+          <div className="create-modal neon-modal">
+            <div className="modal-header">
+              <h2>Add Traffic Data</h2>
+              <button onClick={() => setShowCreateModal(false)} className="close-btn">&times;</button>
+            </div>
+            
+            <div className="modal-body">
+              <div className="form-group">
+                <label>Location</label>
                 <input 
                   type="text" 
-                  placeholder="Search records..." 
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="search-input"
+                  value={newTrafficData.location}
+                  onChange={(e) => setNewTrafficData({...newTrafficData, location: e.target.value})}
+                  placeholder="Enter location..."
                 />
-                <label className="filter-checkbox">
-                  <input 
-                    type="checkbox" 
-                    checked={filterVerified}
-                    onChange={(e) => setFilterVerified(e.target.checked)}
-                  />
-                  Verified Only
-                </label>
               </div>
+              
+              <div className="form-group">
+                <label>Flow Rate (FHE Encrypted)</label>
+                <input 
+                  type="number" 
+                  value={newTrafficData.flowRate}
+                  onChange={(e) => setNewTrafficData({...newTrafficData, flowRate: e.target.value})}
+                  placeholder="Vehicles per minute"
+                />
+              </div>
+              
+              <div className="form-group">
+                <label>Congestion Level (%)</label>
+                <input 
+                  type="number" 
+                  min="0"
+                  max="100"
+                  value={newTrafficData.congestion}
+                  onChange={(e) => setNewTrafficData({...newTrafficData, congestion: e.target.value})}
+                  placeholder="0-100%"
+                />
+              </div>
+            </div>
+            
+            <div className="modal-footer">
+              <button onClick={() => setShowCreateModal(false)} className="neon-btn">Cancel</button>
               <button 
-                onClick={loadData} 
-                className="refresh-btn" 
-                disabled={isRefreshing}
+                onClick={createTrafficData}
+                disabled={creatingData || isEncrypting}
+                className="neon-btn primary"
               >
-                {isRefreshing ? "Refreshing..." : "Refresh"}
+                {creatingData || isEncrypting ? "Encrypting..." : "Create Record"}
               </button>
             </div>
           </div>
-          
-          <div className="data-list">
-            {filteredData.length === 0 ? (
-              <div className="no-data">
-                <p>No traffic data found</p>
-                <button 
-                  className="create-btn" 
-                  onClick={() => setShowCreateModal(true)}
-                >
-                  Create First Record
-                </button>
-              </div>
-            ) : filteredData.map((data, index) => (
-              <div 
-                className={`data-item ${selectedData?.id === data.id ? "selected" : ""} ${data.isVerified ? "verified" : ""}`} 
-                key={index}
-                onClick={() => setSelectedData(data)}
-              >
-                <div className="data-title">{data.name}</div>
-                <div className="data-meta">
-                  <span>Signal Timing: {data.publicValue1}s</span>
-                  <span>Created: {new Date(data.timestamp * 1000).toLocaleDateString()}</span>
-                </div>
-                <div className="data-status">
-                  Status: {data.isVerified ? "✅ Verified" : "🔓 Ready for Verification"}
-                  {data.isVerified && data.decryptedValue && (
-                    <span className="verified-amount">Flow: {data.decryptedValue} vehicles/h</span>
-                  )}
-                </div>
-                <div className="data-creator">Creator: {data.creator.substring(0, 6)}...{data.creator.substring(38)}</div>
-              </div>
-            ))}
-          </div>
         </div>
-      </div>
-      
-      {showCreateModal && (
-        <ModalCreateData 
-          onSubmit={createTrafficData} 
-          onClose={() => setShowCreateModal(false)} 
-          creating={creatingData} 
-          trafficData={newTrafficData} 
-          setTrafficData={setNewTrafficData}
-          isEncrypting={isEncrypting}
-        />
-      )}
-      
-      {selectedData && (
-        <DataDetailModal 
-          data={selectedData} 
-          onClose={() => { 
-            setSelectedData(null); 
-            setDecryptedData({ flowRate: null, signalTiming: null }); 
-          }} 
-          decryptedData={decryptedData} 
-          setDecryptedData={setDecryptedData} 
-          isDecrypting={isDecrypting || fheIsDecrypting} 
-          decryptData={() => decryptData(selectedData.flowRate)}
-          renderAnalysisChart={renderAnalysisChart}
-        />
       )}
       
       {transactionStatus.visible && (
-        <div className="transaction-modal">
-          <div className="transaction-content">
-            <div className={`transaction-icon ${transactionStatus.status}`}>
-              {transactionStatus.status === "pending" && <div className="fhe-spinner"></div>}
-              {transactionStatus.status === "success" && <div className="success-icon">✓</div>}
-              {transactionStatus.status === "error" && <div className="error-icon">✗</div>}
-            </div>
-            <div className="transaction-message">{transactionStatus.message}</div>
+        <div className="transaction-toast">
+          <div className={`toast-content ${transactionStatus.status}`}>
+            {transactionStatus.message}
           </div>
         </div>
       )}
-    </div>
-  );
-};
-
-const ModalCreateData: React.FC<{
-  onSubmit: () => void; 
-  onClose: () => void; 
-  creating: boolean;
-  trafficData: any;
-  setTrafficData: (data: any) => void;
-  isEncrypting: boolean;
-}> = ({ onSubmit, onClose, creating, trafficData, setTrafficData, isEncrypting }) => {
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    if (name === 'flowRate') {
-      const intValue = value.replace(/[^\d]/g, '');
-      setTrafficData({ ...trafficData, [name]: intValue });
-    } else {
-      setTrafficData({ ...trafficData, [name]: value });
-    }
-  };
-
-  return (
-    <div className="modal-overlay">
-      <div className="create-data-modal">
-        <div className="modal-header">
-          <h2>New Traffic Data</h2>
-          <button onClick={onClose} className="close-modal">&times;</button>
-        </div>
-        
-        <div className="modal-body">
-          <div className="fhe-notice">
-            <strong>FHE 🔐 Encryption</strong>
-            <p>Traffic flow data will be encrypted with Zama FHE 🔐 (Integer only)</p>
-          </div>
-          
-          <div className="form-group">
-            <label>Location Name *</label>
-            <input 
-              type="text" 
-              name="name" 
-              value={trafficData.name} 
-              onChange={handleChange} 
-              placeholder="Enter location name..." 
-            />
-          </div>
-          
-          <div className="form-group">
-            <label>Flow Rate (vehicles/h) *</label>
-            <input 
-              type="number" 
-              name="flowRate" 
-              value={trafficData.flowRate} 
-              onChange={handleChange} 
-              placeholder="Enter flow rate..." 
-              step="1"
-              min="0"
-            />
-            <div className="data-type-label">FHE Encrypted Integer</div>
-          </div>
-          
-          <div className="form-group">
-            <label>Signal Timing (seconds) *</label>
-            <input 
-              type="number" 
-              min="1" 
-              max="300" 
-              name="signalTiming" 
-              value={trafficData.signalTiming} 
-              onChange={handleChange} 
-              placeholder="Enter signal timing..." 
-            />
-            <div className="data-type-label">Public Data</div>
-          </div>
-        </div>
-        
-        <div className="modal-footer">
-          <button onClick={onClose} className="cancel-btn">Cancel</button>
-          <button 
-            onClick={onSubmit} 
-            disabled={creating || isEncrypting || !trafficData.name || !trafficData.flowRate || !trafficData.signalTiming} 
-            className="submit-btn"
-          >
-            {creating || isEncrypting ? "Encrypting and Creating..." : "Create Data"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const DataDetailModal: React.FC<{
-  data: TrafficData;
-  onClose: () => void;
-  decryptedData: { flowRate: number | null; signalTiming: number | null };
-  setDecryptedData: (value: { flowRate: number | null; signalTiming: number | null }) => void;
-  isDecrypting: boolean;
-  decryptData: () => Promise<number | null>;
-  renderAnalysisChart: (data: TrafficData, decryptedFlow: number | null, decryptedSignal: number | null) => JSX.Element;
-}> = ({ data, onClose, decryptedData, setDecryptedData, isDecrypting, decryptData, renderAnalysisChart }) => {
-  const handleDecrypt = async () => {
-    if (decryptedData.flowRate !== null) { 
-      setDecryptedData({ flowRate: null, signalTiming: null }); 
-      return; 
-    }
-    
-    const decrypted = await decryptData();
-    if (decrypted !== null) {
-      setDecryptedData({ flowRate: decrypted, signalTiming: decrypted });
-    }
-  };
-
-  return (
-    <div className="modal-overlay">
-      <div className="data-detail-modal">
-        <div className="modal-header">
-          <h2>Traffic Data Details</h2>
-          <button onClick={onClose} className="close-modal">&times;</button>
-        </div>
-        
-        <div className="modal-body">
-          <div className="data-info">
-            <div className="info-item">
-              <span>Location:</span>
-              <strong>{data.name}</strong>
-            </div>
-            <div className="info-item">
-              <span>Creator:</span>
-              <strong>{data.creator.substring(0, 6)}...{data.creator.substring(38)}</strong>
-            </div>
-            <div className="info-item">
-              <span>Date Created:</span>
-              <strong>{new Date(data.timestamp * 1000).toLocaleDateString()}</strong>
-            </div>
-            <div className="info-item">
-              <span>Signal Timing:</span>
-              <strong>{data.publicValue1}s</strong>
-            </div>
-          </div>
-          
-          <div className="data-section">
-            <h3>Encrypted Flow Data</h3>
-            
-            <div className="data-row">
-              <div className="data-label">Flow Rate:</div>
-              <div className="data-value">
-                {data.isVerified && data.decryptedValue ? 
-                  `${data.decryptedValue} vehicles/h (Verified)` : 
-                  decryptedData.flowRate !== null ? 
-                  `${decryptedData.flowRate} vehicles/h (Decrypted)` : 
-                  "🔒 FHE Encrypted"
-                }
-              </div>
-              <button 
-                className={`decrypt-btn ${(data.isVerified || decryptedData.flowRate !== null) ? 'decrypted' : ''}`}
-                onClick={handleDecrypt} 
-                disabled={isDecrypting}
-              >
-                {isDecrypting ? (
-                  "🔓 Verifying..."
-                ) : data.isVerified ? (
-                  "✅ Verified"
-                ) : decryptedData.flowRate !== null ? (
-                  "🔄 Re-verify"
-                ) : (
-                  "🔓 Verify Decryption"
-                )}
-              </button>
-            </div>
-            
-            <div className="fhe-info">
-              <div className="fhe-icon">🔐</div>
-              <div>
-                <strong>FHE 🔐 Traffic Encryption</strong>
-                <p>Flow data is encrypted on-chain. Click to verify decryption using FHE signatures.</p>
-              </div>
-            </div>
-          </div>
-          
-          {(data.isVerified || decryptedData.flowRate !== null) && (
-            <div className="analysis-section">
-              <h3>Traffic Analysis</h3>
-              {renderAnalysisChart(
-                data, 
-                data.isVerified ? data.decryptedValue || null : decryptedData.flowRate, 
-                null
-              )}
-              
-              <div className="decrypted-values">
-                <div className="value-item">
-                  <span>Flow Rate:</span>
-                  <strong>
-                    {data.isVerified ? 
-                      `${data.decryptedValue} vehicles/h` : 
-                      `${decryptedData.flowRate} vehicles/h`
-                    }
-                  </strong>
-                  <span className={`data-badge ${data.isVerified ? 'verified' : 'local'}`}>
-                    {data.isVerified ? 'Verified' : 'Local'}
-                  </span>
-                </div>
-                <div className="value-item">
-                  <span>Signal Timing:</span>
-                  <strong>{data.publicValue1}s</strong>
-                  <span className="data-badge public">Public</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        
-        <div className="modal-footer">
-          <button onClick={onClose} className="close-btn">Close</button>
-          {!data.isVerified && (
-            <button 
-              onClick={handleDecrypt} 
-              disabled={isDecrypting}
-              className="verify-btn"
-            >
-              {isDecrypting ? "Verifying..." : "Verify on-chain"}
-            </button>
-          )}
-        </div>
-      </div>
     </div>
   );
 };
